@@ -46,22 +46,50 @@ switch (command) {
     };
 
     const server = http.createServer((req, res) => {
-      let filePath = path.join(outDir, req.url === '/' ? 'index.html' : req.url);
+      const urlPath = decodeURIComponent(req.url.split('?')[0]);
 
-      // SPA fallback: if file doesn't exist, serve index.html
-      if (!fs.existsSync(filePath)) {
-        filePath = path.join(outDir, 'index.html');
+      // Resolve like Firebase Hosting with cleanUrls: try the exact file,
+      // then "<path>.html", then "<path>/index.html".
+      const candidates = [];
+      if (urlPath === '/') {
+        candidates.push('index.html');
+      } else {
+        const rel = urlPath.replace(/^\/+/, '');
+        candidates.push(rel);
+        candidates.push(rel + '.html');
+        candidates.push(path.join(rel, 'index.html'));
+      }
+
+      let filePath = null;
+      for (const c of candidates) {
+        const p = path.join(outDir, c);
+        if (p.startsWith(outDir) && fs.existsSync(p) && fs.statSync(p).isFile()) {
+          filePath = p;
+          break;
+        }
+      }
+
+      let status = 200;
+      if (!filePath) {
+        status = 404;
+        const nf = path.join(outDir, '404.html');
+        if (fs.existsSync(nf)) filePath = nf;
+      }
+
+      if (!filePath) {
+        res.writeHead(404);
+        res.end('Not found');
+        return;
       }
 
       const ext = path.extname(filePath);
-
       fs.readFile(filePath, (err, data) => {
         if (err) {
           res.writeHead(404);
           res.end('Not found');
           return;
         }
-        res.writeHead(200, { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' });
+        res.writeHead(status, { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' });
         res.end(data);
       });
     });
@@ -98,15 +126,26 @@ switch (command) {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="stylesheet" href="stylesheet.css" />
-    <title>${projectName}</title>
+    <link rel="stylesheet" href="/stylesheet.css" />
+    {{TOTLEY_HEAD}}
   </head>
   <body>
-    <div id="__totley_app"></div>
-    {{TOTLEY_ROUTER}}
+    <div id="__totley_app">{{TOTLEY_CONTENT}}</div>
+    {{TOTLEY_SCRIPT}}
   </body>
 </html>
 `);
+
+    // site.json — SEO / canonical config used to build <head>, sitemap, robots
+    fs.writeFileSync(path.join(projectDir, 'app', 'site.json'),
+      JSON.stringify({
+        url: '',
+        name: projectName,
+        defaultTitle: projectName,
+        defaultDescription: '',
+        ogImage: '',
+        locale: 'en',
+      }, null, 2) + '\n');
 
     // stylesheet.css
     fs.writeFileSync(path.join(projectDir, 'app', 'stylesheet.css'),
@@ -119,7 +158,11 @@ switch (command) {
 
     // home page
     fs.writeFileSync(path.join(projectDir, 'app', 'pages', 'home', 'home.html'),
-`<div style="padding: 2rem; text-align: center;">
+`<!--totley
+title: ${projectName}
+description: Built with Totley
+-->
+<div style="padding: 2rem; text-align: center;">
   <h1>Welcome to ${projectName}</h1>
   <p id="message">Built with Totley</p>
 </div>
